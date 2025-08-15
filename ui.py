@@ -174,6 +174,52 @@ class Telemetry:
     y_axis: float = 0.0
     z_axis: float = 0.0
 
+class JoystickWidget(QtWidgets.QWidget):
+    def __init__(self, parent=None, lock_x=False, lock_y=False):
+        super().__init__(parent)
+        self.setFixedSize(200, 200)
+        self.pos_x = 512
+        self.pos_y = 512
+        self.lock_x = lock_x
+        self.lock_y = lock_y
+
+    def paintEvent(self, event):
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+
+        rect = self.rect()
+
+        # Dış kare
+        painter.setPen(QtGui.QPen(QtGui.QColor("black"), 2))
+        painter.drawRect(rect.adjusted(1, 1, -1, -1))
+
+        # X ve Y eksenleri
+        center_px = rect.width() / 2
+        center_py = rect.height() / 2
+        painter.setPen(QtGui.QPen(QtGui.QColor("gray"), 1, QtCore.Qt.DashLine))
+        painter.drawLine(int(center_px), 0, int(center_px), rect.height())
+        painter.drawLine(0, int(center_py), rect.width(), int(center_py))
+
+        # Joystick topu
+        painter.setBrush(QtGui.QColor("blue"))
+        painter.setPen(QtCore.Qt.NoPen)
+
+        scale_x = rect.width() / 1024
+        scale_y = rect.height() / 1024
+        px = int(self.pos_x * scale_x)
+        py = int(self.pos_y * scale_y)
+
+        painter.drawEllipse(QtCore.QPointF(px, py), 10, 10)
+
+    def update_position(self, x, y):
+        """Analog veriyi güncelle"""
+        if not self.lock_x:
+            self.pos_x = max(0, min(1024, x))
+        if not self.lock_y:
+            self.pos_y = max(0, min(1024, y))
+        self.update()
+
+
 
 # ----------------------------- Ana Pencere -----------------------------
 class ROVConsole(QtWidgets.QMainWindow):
@@ -235,10 +281,10 @@ class ROVConsole(QtWidgets.QMainWindow):
         row1 = QtWidgets.QHBoxLayout()
 
         # "Motor Aktif" yerine "Kamerayı Değiştir" butonu
-        self.btnChangeCamera = self._btn("Kamerayı Değiştir", "blue")
+        self.btnChangeCamera = self._btn("Değiştir", "blue")
         self.btnChangeCamera.clicked.connect(self._change_camera)
 
-        self.btnDisarm = self._btn("Motor Akrif Değil", "gray")
+        self.btnDisarm = self._btn("Düzenlenecek", "gray")
         self.btnConnect = self._btn("Connect", "green")
 
         self.btnDisarm.clicked.connect(lambda: self._set_arm(False))
@@ -248,6 +294,36 @@ class ROVConsole(QtWidgets.QMainWindow):
         row1.addWidget(self.btnDisarm)
         row1.addWidget(self.btnConnect)
         cl.addLayout(row1)
+
+        # Eski grid layout yerine joystick görünümü
+        joyLayout = QtWidgets.QHBoxLayout()
+
+# Sol joystick (normal X-Y hareket)
+        self.joystickXY = JoystickWidget()
+
+        # Sağ joystick (sadece Y ekseni hareketli)
+        self.joystickY = JoystickWidget(lock_x=True)
+
+        joyLayout.addWidget(self.joystickXY)
+        joyLayout.addWidget(self.joystickY)
+        cl.addLayout(joyLayout)
+
+        # Test amaçlı rastgele hareket (gerçek veride kaldır)
+        def test_move():
+            import random
+            self.joystickXY.update_position(
+                random.randint(400, 600),  # X
+                random.randint(400, 600)   # Y
+            )
+            self.joystickY.update_position(
+                512,                       # X sabit
+                random.randint(400, 600)   # Y
+            )
+
+        self.joystickTimer = QtCore.QTimer(self)
+        self.joystickTimer.timeout.connect(test_move)
+        self.joystickTimer.start(500)
+
 
 
 
@@ -265,14 +341,11 @@ class ROVConsole(QtWidgets.QMainWindow):
         cl.addWidget(self.btnMode)
         cl.addStretch(1)
 
-        # Fotoğraf Gösterme
-        self.lblImage = QtWidgets.QLabel()
-        self.lblImage.setAlignment(QtCore.Qt.AlignCenter)
-        self.lblImage.setPixmap(QtGui.QPixmap("su.png").scaled(300, 300, QtCore.Qt.KeepAspectRatio))
-        cl.addWidget(self.lblImage)
-
-
-
+        # # Fotoğraf Gösterme
+        # self.lblImage = QtWidgets.QLabel()
+        # self.lblImage.setAlignment(QtCore.Qt.AlignCenter)
+        # self.lblImage.setPixmap(QtGui.QPixmap("su.png").scaled(300, 300, QtCore.Qt.KeepAspectRatio))
+        # cl.addWidget(self.lblImage)
 
         # Alt bar: Telemetri + Light
         bottom = QtWidgets.QHBoxLayout()
