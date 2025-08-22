@@ -1,21 +1,16 @@
-data#!/usr/bin/env python3
-
-
-import sys
-import time
-from dataclasses import dataclass
+#!/usr/bin/env python3
 
 import cv2
 import numpy as np
+import serial
+import time
+import sys
+import time
+from dataclasses import dataclass
 from PyQt5 import QtCore, QtGui, QtWidgets
 from PyQt5.QtCore import QThread, pyqtSignal
 
 
-import serial
-import time
-
-
-# ----------------------------- YardÄ±mcÄ± BileÅenler -----------------------------
 class VideoWidget(QtWidgets.QLabel):
     frameUpdated = QtCore.pyqtSignal()
 
@@ -31,7 +26,7 @@ class VideoWidget(QtWidgets.QLabel):
         self._frame = frame
         if frame is None:
             return
-        # BGR -> RGB
+
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         h, w, ch = rgb.shape
         bytes_per_line = ch * w
@@ -60,36 +55,12 @@ class VideoWidget(QtWidgets.QLabel):
 
     def paintEvent(self, event):
         super().paintEvent(event)
-        # Overlay: REC ikonu sol Ã¼st, play/pause saÄ Ã¼st
         painter = QtGui.QPainter(self)
         painter.setRenderHint(QtGui.QPainter.Antialiasing)
-
-        # REC simgesi
-        pad = 10
-        rec_rect = QtCore.QRect(pad, pad, 60, 24)
-        painter.setPen(QtCore.Qt.NoPen)
-        painter.setBrush(QtGui.QColor(0, 0, 0, 120))
-        painter.drawRoundedRect(rec_rect, 6, 6)
-        painter.setBrush(QtGui.QColor(230, 50, 50))
-        painter.drawEllipse(rec_rect.left() + 6, rec_rect.top() + 6, 12, 12)
-        painter.setPen(QtGui.QColor(255, 255, 255))
-        painter.setFont(QtGui.QFont("Oswald", 12, QtGui.QFont.Bold))
-        painter.drawText(rec_rect.adjusted(24, 0, 0, 0), QtCore.Qt.AlignVCenter, "REC")
-
-        # Play/Pause butonlarÄ± Ã§izim (gÃ¶sterim; gerÃ§ek butonlar Ã¼stte)
-        # SaÄ Ã¼st kÃ¶Åede daire arka plan
-        r = 22
-        x = self.width() - pad - r * 2 - 6
-        y = pad
-        painter.setPen(QtCore.Qt.NoPen)
-        painter.setBrush(QtGui.QColor(0, 0, 0, 120))
-        painter.drawEllipse(x, y, r * 2, r * 2)
-        painter.drawEllipse(x + r * 2 + 6, y, r * 2, r * 2)
-
         painter.end()
 
 
-class CompassWidget(QtWidgets.QWidget):
+class PusulaWidget(QtWidgets.QWidget):
     yawChanged = QtCore.pyqtSignal(float)
 
     def __init__(self, parent=None):
@@ -154,7 +125,7 @@ class CompassWidget(QtWidgets.QWidget):
 
 
 @dataclass
-class Telemetry:
+class Telemetri:
     mode: str = "Thrust"
     yaw: float = 0.0
     roll: float = 0.0
@@ -215,19 +186,18 @@ class JoystickWidget(QtWidgets.QWidget):
 
 
 class SerialReaderThread(QThread):
-    # Gelen veriyi GUI'ye iletmek idin sinyal
+    # Gelen veriyi GUI'ye iletmek icin sinyal
     dataReceived = pyqtSignal(str)
 
-    def __init__(self, port="/dev/ttyVirtualArduino", baudrate=9600):
+    def __init__(self, port="/dev/ttyUSB0", baudrate=9600):
         super().__init__()
         self.port = port
         self.baudrate = baudrate
         self._running = True
 
     def run(self):
-        # Seri port ba?lant?s?n? ba?lat
         ser = serial.Serial(self.port, self.baudrate, timeout=1)
-        time.sleep(2)  # Ba?lant?n?n oturmas? idin bekleme sdresi
+        time.sleep(2) # Bağlantının oturması için bekle
 
         try:
             while self._running:
@@ -236,7 +206,7 @@ class SerialReaderThread(QThread):
 
                     self.dataReceived.emit(data)  # GUI'ye veri gdnder
         except KeyboardInterrupt:
-            print("Ba?lant? sonland?r?l?yor...")
+            print("Terminating Connection")
         finally:
             ser.close()
 
@@ -246,19 +216,19 @@ class SerialReaderThread(QThread):
 
 
 # ----------------------------- Ana Pencere -----------------------------
-class ROVConsole(QtWidgets.QMainWindow):
-    def __init__(self, camera_index=0):
+class ROVKonsol(QtWidgets.QMainWindow):
+    def __init__(self, kameraIndex=0):
         super().__init__()
-        self.setWindowTitle("ROV Konsol â€ Prototip")
+        self.setWindowTitle("ROV Konsol")
         self.resize(1280, 720)
         self.setStyleSheet(self._styles())
 
         self.cap = None
-        self.camera_index = camera_index
+        self.kameraIndex = kameraIndex
         self.timer = QtCore.QTimer(self)
         self.timer.timeout.connect(self._grab_frame)
 
-        self.telemetry = Telemetry()
+        self.telemetry = Telemetri()
 
         central = QtWidgets.QWidget()
         self.setCentralWidget(central)
@@ -266,12 +236,10 @@ class ROVConsole(QtWidgets.QMainWindow):
         root.setContentsMargins(12, 12, 12, 12)
         root.setSpacing(12)
         
-         # Veri alma i?lemi isin arka planda sal??an thread'i ba?lat
-        self.serial_thread = SerialReaderThread('/dev/ttyVirtualArduino', 9600)
-        self.serial_thread.dataReceived.connect(self.handle_serial_data)
+        self.serial_thread = SerialReaderThread('/dev/ttyUSB0', 9600)
+        self.serial_thread.dataReceived.connect(self.serialVeri)
         self.serial_thread.start()
 
-        # Ãst: Video + Kontrol paneli
         top = QtWidgets.QHBoxLayout()
         top.setSpacing(12)
         root.addLayout(top, 1)
@@ -285,19 +253,18 @@ class ROVConsole(QtWidgets.QMainWindow):
         vlay.addWidget(self.video)
 
         # Play/Pause gerÃ§ek butonlarÄ±
-        pp = QtWidgets.QHBoxLayout()
-        pp.setAlignment(QtCore.Qt.AlignRight)
-        self.btnPlay = QtWidgets.QToolButton(text="â¶")
-        self.btnPause = QtWidgets.QToolButton(text="")
-        self.btnPlay.clicked.connect(lambda: self.video.setPlaying(True))
-        self.btnPause.clicked.connect(lambda: self.video.setPlaying(False))
-        pp.addWidget(self.btnPlay)
-        pp.addWidget(self.btnPause)
-        vlay.addLayout(pp)
+        #pp = QtWidgets.QHBoxLayout()
+        #pp.setAlignment(QtCore.Qt.AlignRight)
+        #self.btnPlay = QtWidgets.QToolButton(text="â¶")
+        #self.btnPause = QtWidgets.QToolButton(text="")
+        #self.btnPlay.clicked.connect(lambda: self.video.setPlaying(True))
+        #self.btnPause.clicked.connect(lambda: self.video.setPlaying(False))
+        #pp.addWidget(self.btnPlay)
+        #pp.addWidget(self.btnPause)
+        #vlay.addLayout(pp)
 
         top.addWidget(video_container, 2)
 
-        # SaÄ kontrol paneli
         ctrl = QtWidgets.QFrame()
         ctrl.setObjectName("controlPanel")
         ctrl.setMinimumWidth(360)
@@ -306,15 +273,14 @@ class ROVConsole(QtWidgets.QMainWindow):
         cl.setSpacing(10)
 
         # Arm/Disarm/Connect
-       # Arm/Disarm/Connect
+        # Arm/Disarm/Connect
         row1 = QtWidgets.QHBoxLayout()
 
-        # "Motor Aktif" yerine "KamerayÄ± DeÄiÅtir" butonu
-        self.btnChangeCamera = self._btn("DeÄiÅtir", "blue")
-        self.btnChangeCamera.clicked.connect(self._change_camera)
+        self.btnChangeCamera = self._buton("Change Camera", "blue")
+        self.btnChangeCamera.clicked.connect(self._kameraDegistir)
 
-        self.btnDisarm = self._btn("DÃ¼zenlenecek", "gray")
-        self.btnConnect = self._btn("Connect", "green")
+        self.btnDisarm = self._buton("Pass", "gray")
+        self.btnConnect = self._buton("Connect", "green")
 
         self.btnDisarm.clicked.connect(lambda: self._set_arm(False))
         self.btnConnect.clicked.connect(self.toggle_connection)
@@ -340,8 +306,6 @@ class ROVConsole(QtWidgets.QMainWindow):
         # Test amaÃ§lÄ± rastgele hareket (gerÃ§ek veride kaldÄ±r)
         
         
-        
-
         # Piston/Joystick
         row3 = QtWidgets.QHBoxLayout()
         self.lblPiston = QtWidgets.QLabel("Piston Mode: None")
@@ -351,12 +315,11 @@ class ROVConsole(QtWidgets.QMainWindow):
         row3.addWidget(self.lblJoy)
         cl.addLayout(row3)
 
-        self.btnMode = self._btn("Mode: Joystick", "green")
+        self.btnMode = self._buton("Mode: Joystick", "green")
         self.btnMode.clicked.connect(lambda: self._log_action("Mode: Joystick"))
         cl.addWidget(self.btnMode)
         cl.addStretch(1)
 
-        # # FotoÄraf GÃ¶sterme
         # self.lblImage = QtWidgets.QLabel()
         # self.lblImage.setAlignment(QtCore.Qt.AlignCenter)
         # self.lblImage.setPixmap(QtGui.QPixmap("su.png").scaled(300, 300, QtCore.Qt.KeepAspectRatio))
@@ -370,34 +333,32 @@ class ROVConsole(QtWidgets.QMainWindow):
         self.telemetryBox = self._telemetry_panel()
         bottom.addWidget(self.telemetryBox, 3)
 
-        self.btnLight = self._btn("IÅÄ±klarÄ± Kapat", "red")
+        self.btnLight = self._buton("Turn off lights", "red")
         self.btnLight.setFixedHeight(56)
-        self.btnLight.clicked.connect(self._toggle_light)
+        self.btnLight.clicked.connect(self._isikKontrol)
         bottom.addWidget(self.btnLight, 1)
 
-        # SaÄ altta Pusula
-        self.compass = CompassWidget()
+        self.compass = PusulaWidget()
         rightBottom = QtWidgets.QFrame()
         rb = QtWidgets.QVBoxLayout(rightBottom)
         rb.addWidget(self.compass)
         bottom.addWidget(rightBottom, 2)
 
-        # Timer: sahte telemetri gÃ¼ncelle
+        # Timer: sahte telemetri guncelle
         self.telemetryTimer = QtCore.QTimer(self)
         self.telemetryTimer.timeout.connect(self._update_fake_telemetry)
         self.telemetryTimer.start(100)
 
-        # BaÅlangÄ±Ã§ta baÄlanmayÄ± dene
         self.toggle_connection()  # try open camera
 
     # ------------------------- UI ParÃ§alarÄ± -------------------------
-    def _btn(self, text: str, kind: str = "dark") -> QtWidgets.QPushButton:
+    def _buton(self, text: str, kind: str = "dark") -> QtWidgets.QPushButton:
         b = QtWidgets.QPushButton(text)
         b.setProperty("kind", kind)
         b.setMinimumHeight(42)
         return b
         
-    def handle_serial_data(self, data):
+    def serialVeri(self, data):
         import random
         # Gelen veriyi ay?kla
         values = data.split(',')
@@ -415,34 +376,32 @@ class ROVConsole(QtWidgets.QMainWindow):
             random.randint(400, 600)   # Y sabit
         )
 
-    def stop_serial_thread(self):
-        # Veri almay? durdur
+    def veriAlmayiDurdur(self):
         self.serial_thread.stop()
         print("Thread durduruldu.")
 
-    def closeEvent(self, event):
-        # Pencere kapan?rken thread'i durdur
+    def eylemleriDurdur(self, event):
         self.serial_thread.stop()
         event.accept()
     
 
-    def _change_camera(self):
-        self.camera_index += 1
+    def _kameraDegistir(self):
+        self.kameraIndex += 1
         # 3 kameradan sonra tekrar 0'a dÃ¶nsÃ¼n (opsiyonel)
-        if self.camera_index > 2:  # burada 2, sistemdeki max kamera sayÄ±sÄ±na gÃ¶re deÄiÅtirilebilir
-            self.camera_index = 0
+        if self.kameraIndex > 2:  # burada 2, sistemdeki max kamera sayÄ±sÄ±na gÃ¶re deÄiÅtirilebilir
+            self.kameraIndex = 0
 
         # Mevcut kamerayÄ± kapat
         if self.cap and self.cap.isOpened():
             self.cap.release()
 
         # Yeni kamerayÄ± baÅlat
-        self.cap = cv2.VideoCapture(self.camera_index)
+        self.cap = cv2.VideoCapture(self.kameraIndex)
         if not self.cap.isOpened():
             QtWidgets.QMessageBox.warning(self, "Kamera HatasÄ±",
-                                        f"Kamera {self.camera_index} aÃ§Ä±lamadÄ±!")
+                                        f"Kamera {self.kameraIndex} aÃ§Ä±lamadÄ±!")
         else:
-            self._log_action(f"Kamera {self.camera_index} seÃ§ildi")
+            self._log_action(f"Kamera {self.kameraIndex} seÃ§ildi")
 
 
     def _disabled_box(self, placeholder: str):
@@ -527,14 +486,18 @@ class ROVConsole(QtWidgets.QMainWindow):
             self._close_camera()
 
     def _open_camera(self):
-        self.cap = cv2.VideoCapture(self.camera_index)
+        self.cap = cv2.VideoCapture('/dev/video0', cv2.CAP_V4L2)
+        self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))  # MJPEG formatını zorla
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)  # Çözünürlük ayarı
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)  # Çözünürlük ayarı
+
         if not self.cap.isOpened():
             self.cap.release()
             self.cap = None
-            QtWidgets.QMessageBox.warning(self, "Kamera", "Kamera aÃ§Ä±lamadÄ± (index 0).")
+            QtWidgets.QMessageBox.warning(self, "Kamera", "Kamera açılamadı.")
             return
         self.timer.start(33)  # ~30 FPS
-        self.btnConnect.setText("BaÄlantÄ±yÄ± Kes")
+        self.btnConnect.setText("Disconnect")
 
     def _close_camera(self):
         self.timer.stop()
@@ -542,7 +505,7 @@ class ROVConsole(QtWidgets.QMainWindow):
             self.cap.release()
             self.cap = None
         self.video.setFrame(np.zeros((360, 640, 3), dtype=np.uint8))
-        self.btnConnect.setText("BaÄlan")
+        self.btnConnect.setText("Connect")
 
     def _grab_frame(self):
         if not self.video.isPlaying():
@@ -572,17 +535,17 @@ class ROVConsole(QtWidgets.QMainWindow):
 
 
     # ------------------------- Ä°Ålevler -------------------------
-    def _set_arm(self, on: bool):
+    def _KolKontrol(self, on: bool):
         self.telemetry.arm = on
         self._refresh_telemetry_labels()
         self._log_action("ARM ON" if on else "ARM OFF")
 
-    def _toggle_light(self):
-        if self.btnLight.text().endswith("Kapat"):
-            self.btnLight.setText("IÅÄ±klarÄ± AÃ§")
+    def _isikKontrol(self):
+        if self.btnLight.text().endswith("Turn off lights"):
+            self.btnLight.setText("Turn on lights")
             self.btnLight.setProperty("kind", "green")
         else:
-            self.btnLight.setText("IÅÄ±klarÄ± Kapat")
+            self.btnLight.setText("Turn off lights")
             self.btnLight.setProperty("kind", "red")
         self.style().unpolish(self.btnLight)
         self.style().polish(self.btnLight)
@@ -595,42 +558,11 @@ class ROVConsole(QtWidgets.QMainWindow):
         self._close_camera()
         super().closeEvent(event)
         
-        
-    def kumandaVeriAl(self):
-        ser = serial.Serial('/dev/ttyVirtualArduino', 9600, timeout=1)
-        time.sleep(2)  # BaÄlantÄ±nÄ±n oturmasÄ± iÃ§in bekleme sÃ¼resi
-
-        try:
-            while True:
-                if ser.in_waiting > 0:  # Gelen veri varsa
-                    data = ser.readline().decode('utf-8').strip()  # Veriyi okuma ve decode etme
-                    print("Gelen veri:", data)  # Ä°stersen ekrana yazdÄ±r
-
-                    su = data.split(",")  # VirgÃ¼lle ayÄ±r
-
-                  
-                    sensor_1 = int(su[0])
-                    sensor_2 = int(su[1])
-                    sensor_3 = int(su[2])
-                    button_1 = int(su[3])
-                    button_2 = int(su[4])
-                    button_3 = int(su[5])
-                    button_4 = int(su[6])
-
-                    # Test iÃ§in ekrana yazdÄ±r
-                    print(sensor_1, sensor_2, sensor_3, button_1, button_2, button_3, button_4)
-
-        except KeyboardInterrupt:
-            print("BaÄlantÄ± sonlandÄ±rÄ±lÄ±yor...")
-        finally:
-            ser.close()  # Seri baÄlantÄ±yÄ± kapatma
-
-
 
 # ----------------------------- Main -----------------------------
 def main():
     app = QtWidgets.QApplication(sys.argv)
-    win = ROVConsole(camera_index=1)
+    win = ROVKonsol(kameraIndex=1)
     win.show()
     sys.exit(app.exec_())
 
