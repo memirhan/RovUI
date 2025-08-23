@@ -9,6 +9,8 @@ import time
 from dataclasses import dataclass
 from PyQt5 import QtCore, QtGui, QtWidgets
 from PyQt5.QtCore import QThread, pyqtSignal
+import os
+import sqlite3
 
 
 class VideoWidget(QtWidgets.QLabel):
@@ -183,12 +185,9 @@ class JoystickWidget(QtWidgets.QWidget):
             self.pos_y = max(0, min(1024, y))
         self.update()
         
-
-
 class SerialReaderThread(QThread):
     # Gelen veriyi GUI'ye iletmek icin sinyal
     dataReceived = pyqtSignal(str)
-
     def __init__(self, port="/dev/ttyUSB0", baudrate=9600):
         super().__init__()
         self.port = port
@@ -203,7 +202,6 @@ class SerialReaderThread(QThread):
             while self._running:
                 if ser.in_waiting > 0:  # Veri varsa
                     data = ser.readline().decode('utf-8').strip()  # Veri oku
-
                     self.dataReceived.emit(data)  # GUI'ye veri gdnder
         except KeyboardInterrupt:
             print("Terminating Connection")
@@ -222,6 +220,8 @@ class ROVKonsol(QtWidgets.QMainWindow):
         self.setWindowTitle("ROV Konsol")
         self.resize(1280, 720)
         self.setStyleSheet(self._styles())
+        self.showMaximized()
+
 
         self.cap = None
         self.kameraIndex = kameraIndex
@@ -236,10 +236,12 @@ class ROVKonsol(QtWidgets.QMainWindow):
         root.setContentsMargins(12, 12, 12, 12)
         root.setSpacing(12)
         
-        self.serial_thread = SerialReaderThread('/dev/ttyUSB0', 9600)
-        self.serial_thread.dataReceived.connect(self.serialVeri)
-        self.serial_thread.start()
-
+        #TEST MODU İÇİN YORUM SATIRINA ALINMIŞTIR BUNU AÇIN ARDUNİO BAĞLIYKEN
+        
+        # self.serial_thread = SerialReaderThread('/dev/ttyUSB0', 9600)
+        # self.serial_thread.dataReceived.connect(self.serialVeri)
+        # self.serial_thread.start()
+        
         top = QtWidgets.QHBoxLayout()
         top.setSpacing(12)
         root.addLayout(top, 1)
@@ -251,18 +253,6 @@ class ROVKonsol(QtWidgets.QMainWindow):
         vlay = QtWidgets.QVBoxLayout(video_container)
         vlay.setContentsMargins(0, 0, 0, 0)
         vlay.addWidget(self.video)
-
-        # Play/Pause gerÃ§ek butonlarÄ±
-        #pp = QtWidgets.QHBoxLayout()
-        #pp.setAlignment(QtCore.Qt.AlignRight)
-        #self.btnPlay = QtWidgets.QToolButton(text="â¶")
-        #self.btnPause = QtWidgets.QToolButton(text="")
-        #self.btnPlay.clicked.connect(lambda: self.video.setPlaying(True))
-        #self.btnPause.clicked.connect(lambda: self.video.setPlaying(False))
-        #pp.addWidget(self.btnPlay)
-        #pp.addWidget(self.btnPause)
-        #vlay.addLayout(pp)
-
         top.addWidget(video_container, 2)
 
         ctrl = QtWidgets.QFrame()
@@ -279,33 +269,30 @@ class ROVKonsol(QtWidgets.QMainWindow):
         self.btnChangeCamera = self._buton("Change Camera", "blue")
         self.btnChangeCamera.clicked.connect(self._kameraDegistir)
 
-        self.btnDisarm = self._buton("Pass", "gray")
+        self.btnConfig = self._buton("Config", "gray")
         self.btnConnect = self._buton("Connect", "green")
 
-        self.btnDisarm.clicked.connect(lambda: self._set_arm(False))
+        self.btnConfig.clicked.connect(lambda: self._configMenu())
         self.btnConnect.clicked.connect(self.toggle_connection)
 
         row1.addWidget(self.btnChangeCamera)
-        row1.addWidget(self.btnDisarm)
+        row1.addWidget(self.btnConfig)
         row1.addWidget(self.btnConnect)
         cl.addLayout(row1)
 
         # Eski grid layout yerine joystick gÃ¶rÃ¼nÃ¼mÃ¼
-        joyLayout = QtWidgets.QHBoxLayout()
+        configLayout = QtWidgets.QHBoxLayout()
 
-# Sol joystick (normal X-Y hareket)
+        # Sol joystick (normal X-Y hareket)
         self.joystickXY = JoystickWidget()
 
         # SaÄ joystick (sadece Y ekseni hareketli)
         self.joystickY = JoystickWidget(lock_x=True)
 
-        joyLayout.addWidget(self.joystickXY)
-        joyLayout.addWidget(self.joystickY)
-        cl.addLayout(joyLayout)
-
-        # Test amaÃ§lÄ± rastgele hareket (gerÃ§ek veride kaldÄ±r)
-        
-        
+        configLayout.addWidget(self.joystickXY)
+        configLayout.addWidget(self.joystickY)
+        cl.addLayout(configLayout)
+               
         # Piston/Joystick
         row3 = QtWidgets.QHBoxLayout()
         self.lblPiston = QtWidgets.QLabel("Piston Mode: None")
@@ -320,6 +307,36 @@ class ROVKonsol(QtWidgets.QMainWindow):
         cl.addWidget(self.btnMode)
         cl.addStretch(1)
 
+        #Joystick layout ve alt panel
+        configLayout = QtWidgets.QVBoxLayout()
+
+        # Sol ve sağ joystick
+        joysticks = QtWidgets.QHBoxLayout()
+        self.joystickXY = JoystickWidget()
+        self.joystickY = JoystickWidget(lock_x=True)
+
+        configLayout.addLayout(joysticks)
+
+        # X, Y, Z değerlerini gösteren satırlar
+        coordLayout = QtWidgets.QHBoxLayout()
+        self.lblXVal = QtWidgets.QLabel("X: 0")
+        self.lblYVal = QtWidgets.QLabel("Y: 0")
+        self.lblZVal = QtWidgets.QLabel("Z: 0")
+
+        for lbl in [self.lblXVal, self.lblYVal, self.lblZVal]:
+            lbl.setAlignment(QtCore.Qt.AlignCenter)
+            lbl.setStyleSheet("color: #e9e9ea; font-weight: bold;")
+
+        coordLayout.addWidget(self.lblXVal)
+        coordLayout.addWidget(self.lblYVal)
+        coordLayout.addWidget(self.lblZVal)
+        configLayout.addLayout(coordLayout)
+
+        self._load_last_from_db()
+
+        cl.addLayout(configLayout)
+
+
         # self.lblImage = QtWidgets.QLabel()
         # self.lblImage.setAlignment(QtCore.Qt.AlignCenter)
         # self.lblImage.setPixmap(QtGui.QPixmap("su.png").scaled(300, 300, QtCore.Qt.KeepAspectRatio))
@@ -330,19 +347,36 @@ class ROVKonsol(QtWidgets.QMainWindow):
         bottom.setSpacing(12)
         root.addLayout(bottom, 0)
 
+        # Telemetry
         self.telemetryBox = self._telemetry_panel()
         bottom.addWidget(self.telemetryBox, 3)
 
+        # Butonları dikeyde toplayacak layout
+        btnLayout = QtWidgets.QVBoxLayout()
+
         self.btnLight = self._buton("Turn off lights", "red")
         self.btnLight.setFixedHeight(56)
-        self.btnLight.clicked.connect(self._isikKontrol)
-        bottom.addWidget(self.btnLight, 1)
+        btnLayout.addWidget(self.btnLight)
 
+        self.btnOtonom = self._buton("Otonom", "red")
+        self.btnOtonom.setFixedHeight(56)
+        btnLayout.addWidget(self.btnOtonom)
+
+        self.btnKol = self._buton("Kol Kapat", "red")
+        self.btnKol.setFixedHeight(56)
+        self.btnKol.clicked.connect(self._kolKontrol)
+        btnLayout.addWidget(self.btnKol)
+
+        # Buton grubunu ekle
+        bottom.addLayout(btnLayout, 1)
+
+        # Compass
         self.compass = PusulaWidget()
         rightBottom = QtWidgets.QFrame()
         rb = QtWidgets.QVBoxLayout(rightBottom)
         rb.addWidget(self.compass)
         bottom.addWidget(rightBottom, 2)
+
 
         # Timer: sahte telemetri guncelle
         self.telemetryTimer = QtCore.QTimer(self)
@@ -350,8 +384,30 @@ class ROVKonsol(QtWidgets.QMainWindow):
         self.telemetryTimer.start(100)
 
         self.toggle_connection()  # try open camera
+        self.serialVeri2(data=None)
 
-    # ------------------------- UI ParÃ§alarÄ± -------------------------
+    # ------------------------- UI Parcalari -------------------------
+
+    def _load_last_from_db(self):
+        import sqlite3, os
+        db_path = os.path.join(os.path.dirname(__file__), "db", "config.db")
+        if os.path.exists(db_path):
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+            cursor.execute("SELECT x, y, z FROM otonom_config ORDER BY id DESC LIMIT 1")
+            row = cursor.fetchone()
+            if row:
+                lastX, lastY, lastZ = row
+            else:
+                lastX = lastY = lastZ = None
+            conn.close()
+        else:
+            lastX = lastY = lastZ = None
+
+        self.lblXVal.setText(f"X: {lastX}")
+        self.lblYVal.setText(f"Y: {lastY}")
+        self.lblZVal.setText(f"Z: {lastZ}")
+
     def _buton(self, text: str, kind: str = "dark") -> QtWidgets.QPushButton:
         b = QtWidgets.QPushButton(text)
         b.setProperty("kind", kind)
@@ -368,6 +424,76 @@ class ROVKonsol(QtWidgets.QMainWindow):
 
         x_value = int(values[0])  # 1. de?er x ekseni olarak al
         y_value = int(values[1])  # 2. de?er y ekseni olarak al
+        z_value = int(values[2])
+        light_value = int(values[3])
+        arm_value = int(values[4])
+        otonom_value = int(values[5])
+
+        otonom_value = 1
+#------------ Light Value Control ------------
+        if light_value == 1:
+            print("Işık açılıyor")
+            self.btnLight.setText("Işık: Aktif")
+            self.btnLight.setProperty("kind", "green")
+
+            # Kodlar Buraya...
+
+        elif light_value == 0:
+            print("ışık Kapalı")
+            self.btnLight.setText("Işık: Kapalı")
+            self.btnLight.setProperty("kind", "red")
+
+        else:
+            print("Işık Value Error")
+            self.btnLight.setText("Işık: Hata")
+            self.btnLight.setProperty("kind", "yellow")
+
+        self.style().unpolish(self.btnLight)
+        self.style().polish(self.btnLight)
+
+#------------ Arm Value Control ------------
+
+        if arm_value == 1:
+            print("kol açılıyor")
+            self.btnOtonom.setText("Kol: Aktif")
+            self.btnOtonom.setProperty("kind", "green")
+
+            # Kodlar Buraya...
+
+        elif arm_value == 0:
+            print("otonom Kapalı")
+            self.btnOtonom.setText("Otonom: Kapalı")
+            self.btnOtonom.setProperty("kind", "red")
+
+        else:
+            print("Arm Value Error")
+            self.btnOtonom.setText("Arm: Hata")
+            self.btnOtonom.setProperty("kind", "yellow")
+
+        self.style().unpolish(self.btnOtonom)
+        self.style().polish(self.btnOtonom)
+
+#------------ Otonom Value Control ------------
+
+        if otonom_value == 1:
+            print("otonom açılıyor")
+            QtWidgets.QMessageBox.information(self,"Başarılı", "Otonom Göreve Geçildi.")
+            self.btnOtonom.setText("Otonom: Aktif")
+            self.btnOtonom.setProperty("kind", "green")
+            # Kodlar buraya...
+
+        elif otonom_value == 0:
+            print("otonom Kapalı")
+            self.btnOtonom.setText("Otonom: Kapalı")
+            self.btnOtonom.setProperty("kind", "red")
+
+        else:
+            print("otonom Value Error")
+            self.btnOtonom.setText("Otonom: Hata")
+            self.btnOtonom.setProperty("kind", "yellow")
+
+        self.style().unpolish(self.btnOtonom)
+        self.style().polish(self.btnOtonom)
 
         # Joystick pozisyonunu gsncelle
         self.joystickXY.update_position(x_value, y_value)
@@ -375,6 +501,80 @@ class ROVKonsol(QtWidgets.QMainWindow):
             512,                       # X sabit
             random.randint(400, 600)   # Y sabit
         )
+
+    def serialVeri2(self, data=None):
+        import random
+        if data is None:  # Eğer dışarıdan veri gelmediyse
+            x = random.randint(0, 100)
+            y = random.randint(0, 100)
+            z = random.randint(0, 100)
+            light = random.randint(0, 1)
+            arm = random.randint(0, 1)
+            otonom = 0
+            data = f"{x},{y},{z},{light},{arm},{otonom}"
+            print(data)
+
+        values = data.split(',')
+
+        if otonom == 1:
+            print("otonom açılıyor")
+            QtWidgets.QMessageBox.information(self,"Başarılı", "Otonom Göreve Geçildi.")
+            self.btnOtonom.setText("Otonom: Aktif")
+            self.btnOtonom.setProperty("kind", "green")
+            # Otonom kodları buraya...
+
+        elif otonom == 0:
+            print("otonom Kapalı")
+            self.btnOtonom.setText("Otonom: Kapalı")
+            self.btnOtonom.setProperty("kind", "red")
+
+        else:
+            print("otonom Value Error")
+            self.btnOtonom.setText("Otonom: Hata")
+            self.btnOtonom.setProperty("kind", "yellow")
+
+        self.style().unpolish(self.btnOtonom)
+        self.style().polish(self.btnOtonom)
+
+        
+        if arm == 1:
+            print("kol açılıyor")
+            self.btnKol.setText("Kol: Aktif")
+            self.btnKol.setProperty("kind", "green")
+
+        elif arm == 0:
+            print("otonom Kapalı")
+            self.btnKol.setText("Otonom: Kapalı")
+            self.btnKol.setProperty("kind", "red")
+
+        else:
+            print("Arm Value Error")
+            self.btnKol.setText("Arm: Hata")
+            self.btnKol.setProperty("kind", "yellow")
+
+
+        self.style().unpolish(self.btnKol)
+        self.style().polish(self.btnKol)
+
+        if light == 1:
+            print("Işık açılıyor")
+            self.btnLight.setText("Işık: Aktif")
+            self.btnLight.setProperty("kind", "green")
+
+            # Kodlar Buraya...
+
+        elif light == 0:
+            print("ışık Kapalı")
+            self.btnLight.setText("Işık: Kapalı")
+            self.btnLight.setProperty("kind", "red")
+
+        else:
+            print("Işık Value Error")
+            self.btnLight.setText("Işık: Hata")
+            self.btnLight.setProperty("kind", "yellow")
+
+        self.style().unpolish(self.btnLight)
+        self.style().polish(self.btnLight)
 
     def veriAlmayiDurdur(self):
         self.serial_thread.stop()
@@ -403,12 +603,6 @@ class ROVKonsol(QtWidgets.QMainWindow):
         else:
             self._log_action(f"Kamera {self.kameraIndex} seÃ§ildi")
 
-
-    def _disabled_box(self, placeholder: str):
-        w = QtWidgets.QLineEdit()
-        w.setPlaceholderText(placeholder)
-        w.setEnabled(False)
-        return w
 
     def _telemetry_panel(self):
         box = QtWidgets.QFrame()
@@ -485,6 +679,73 @@ class ROVKonsol(QtWidgets.QMainWindow):
         else:
             self._close_camera()
 
+
+
+    def _configMenu(self):
+        dialog = QtWidgets.QDialog(self)
+        dialog.setWindowTitle("Eksen Konfigürasyonu")
+
+        layout = QtWidgets.QFormLayout(dialog)
+
+        # X, Y, Z input alanları (sadece integer)
+        spinX = QtWidgets.QSpinBox()
+        spinX.setRange(-9999, 9999)
+
+        spinY = QtWidgets.QSpinBox()
+        spinY.setRange(-9999, 9999)
+
+        spinZ = QtWidgets.QSpinBox()
+        spinZ.setRange(-9999, 9999)
+
+        layout.addRow("X Eksen:", spinX)
+        layout.addRow("Y Eksen:", spinY)
+        layout.addRow("Z Eksen:", spinZ)
+
+        # Butonlar (Kaydet / İptal)
+        btns = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Save | QtWidgets.QDialogButtonBox.Cancel)
+        layout.addRow(btns)
+
+        # db klasörünü kontrol et, yoksa oluştur
+        base_dir = os.path.dirname(__file__)
+        db_dir = os.path.join(base_dir, "db")
+        if not os.path.exists(db_dir):
+            os.makedirs(db_dir)
+
+        db_path = os.path.join(db_dir, "config.db")
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+
+        # Tablo yoksa oluştur
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS otonom_config (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                x INTEGER,
+                y INTEGER,
+                z INTEGER,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.commit()
+
+        def kaydet():
+            x = spinX.value()
+            y = spinY.value()
+            z = spinZ.value()
+            # Veritabanına kaydet
+            cursor.execute("INSERT INTO otonom_config (x, y, z) VALUES (?, ?, ?)", (x, y, z))
+            conn.commit()
+            self._load_last_from_db()
+            QtWidgets.QMessageBox.information(dialog, "Başarılı", f"X: {x}, Y: {y}, Z: {z} olarak veriler kaydedildi.")
+            dialog.accept()
+
+        btns.accepted.connect(kaydet)
+        btns.rejected.connect(dialog.reject)
+
+        dialog.exec_()
+        conn.close()
+
+
+
     def _open_camera(self):
         self.cap = cv2.VideoCapture('/dev/video0', cv2.CAP_V4L2)
         self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))  # MJPEG formatını zorla
@@ -535,21 +796,27 @@ class ROVKonsol(QtWidgets.QMainWindow):
 
 
     # ------------------------- Ä°Ålevler -------------------------
-    def _KolKontrol(self, on: bool):
-        self.telemetry.arm = on
-        self._refresh_telemetry_labels()
-        self._log_action("ARM ON" if on else "ARM OFF")
-
-    def _isikKontrol(self):
-        if self.btnLight.text().endswith("Turn off lights"):
-            self.btnLight.setText("Turn on lights")
-            self.btnLight.setProperty("kind", "green")
+    def _kolKontrol(self, on: bool):
+        if self.btnKol.text().endswith("Kol Kapat"):
+            self.btnKol.setText("Kol Aç")
+            self.btnKol.setProperty("kind", "green")
         else:
-            self.btnLight.setText("Turn off lights")
-            self.btnLight.setProperty("kind", "red")
-        self.style().unpolish(self.btnLight)
-        self.style().polish(self.btnLight)
-        self._log_action(self.btnLight.text())
+            self.btnKol.setText("Kol Kapat")
+            self.btnKol.setProperty("kind", "red")
+        self.style().unpolish(self.btnKol)
+        self.style().polish(self.btnKol)
+        self._log_action(self.btnKol.text())
+        
+    # def _isikKontrol(self):
+    #     if self.btnLight.text().endswith("Turn off lights"):
+    #         self.btnLight.setText("Turn on lights")
+    #         self.btnLight.setProperty("kind", "green")
+    #     else:
+    #         self.btnLight.setText("Turn off lights")
+    #         self.btnLight.setProperty("kind", "red")
+    #     self.style().unpolish(self.btnLight)
+    #     self.style().polish(self.btnLight)
+    #     self._log_action(self.btnLight.text())
 
     def _log_action(self, msg: str):
         print("[ACTION]", msg)
